@@ -17,11 +17,11 @@ except Exception as e:
 # Set to 0 for default laptop webcam
 CAMERA_URL = 0 
 
-# Initialize MediaPipe Hand Landmarker (Tasks API)
+# Initialize MediaPipe Hand Landmarker (Configured for up to 2 hands)
 base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
 options = vision.HandLandmarkerOptions(
     base_options=base_options,
-    num_hands=1,
+    num_hands=2,  # <--- CHANGED: Support up to 2 hands simultaneously
     min_hand_detection_confidence=0.5,
     min_hand_presence_confidence=0.5,
     min_tracking_confidence=0.5
@@ -42,9 +42,10 @@ cap = cv2.VideoCapture(CAMERA_URL)
 bullets = []
 birds = []
 explosions = []
+muzzle_flashes = []  # List to support simultaneous muzzle flashes for both hands
 
-flash_counter = 0
-was_cocked = False
+# Track 'cocked' state separately for up to 2 hands
+was_cocked_state = {}
 score = 0
 bird_spawn_timer = 0
 
@@ -67,14 +68,14 @@ while cap.isOpened():
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
     detection_result = detector.detect(mp_image)
 
-    status_text = "Searching Hand..."
+    status_text = "Searching Hands..."
     status_color = (150, 150, 150)
 
     # -------------------------------------------------------------
     # 1. SPAWN BIRDS / TARGETS
     # -------------------------------------------------------------
     bird_spawn_timer += 1
-    if bird_spawn_timer > 40:  # Spawns a new bird every ~1.5 seconds
+    if bird_spawn_timer > 30:  # Faster spawns for dual-hand gameplay
         bird_spawn_timer = 0
         birds.append({
             'x': float(random.randint(50, w - 50)),
@@ -86,11 +87,15 @@ while cap.isOpened():
         })
 
     # -------------------------------------------------------------
-    # 2. HAND POSE & FINGER GUN DETECTION
+    # 2. HAND POSE & DUAL FINGER GUN DETECTION
     # -------------------------------------------------------------
     if detection_result.hand_landmarks:
-        for hand_landmarks in detection_result.hand_landmarks:
+        for idx, hand_landmarks in enumerate(detection_result.hand_landmarks):
             lm = hand_landmarks
+
+            # Initialize cocked status for each detected hand index
+            if idx not in was_cocked_state:
+                was_cocked_state[idx] = False
 
             # Draw Hand Skeleton
             for conn in HAND_CONNECTIONS:
@@ -124,17 +129,20 @@ while cap.isOpened():
                 cv2.circle(frame, tip_px, 8, (0, 0, 255), -1)
 
                 if thumb_ratio > 0.65:
-                    was_cocked = True
-                    status_text = "READY / COCKED"
+                    was_cocked_state[idx] = True
+                    status_text = "DUAL READY"
                     status_color = (0, 255, 255)
 
-                elif thumb_ratio < 0.45 and was_cocked:
-                    was_cocked = False
-                    flash_counter = 5
+                elif thumb_ratio < 0.45 and was_cocked_state[idx]:
+                    was_cocked_state[idx] = False
                     status_text = "BANG!"
                     status_color = (0, 0, 255)
+                    
                     if gun_sound:
                         gun_sound.play()
+
+                    # Add flash for this specific hand tip
+                    muzzle_flashes.append({'x': tip_px[0], 'y': tip_px[1], 'life': 5})
 
                     base_px = (int(lm[5].x * w), int(lm[5].y * h))
                     vx = tip_px[0] - base_px[0]
@@ -150,11 +158,13 @@ while cap.isOpened():
                         'life': 30
                     })
                 else:
-                    status_text = "AIMING"
-                    status_color = (0, 255, 0)
+                    if status_text != "BANG!":
+                        status_text = "AIMING"
+                        status_color = (0, 255, 0)
             else:
-                status_text = "HAND DETECTED"
-                status_color = (255, 255, 0)
+                if status_text not in ["AIMING", "DUAL READY", "BANG!"]:
+                    status_text = "HAND DETECTED"
+                    status_color = (255, 255, 0)
 
     # -------------------------------------------------------------
     # 3. UPDATE BIRDS
@@ -163,12 +173,10 @@ while cap.isOpened():
         b['x'] += b['vx']
         b['y'] += b['vy']
 
-        # Render Bird body & wing accent
         center = (int(b['x']), int(b['y']))
         cv2.circle(frame, center, b['radius'], b['color'], -1)
         cv2.circle(frame, center, b['radius'] // 2, (255, 255, 255), -1)
 
-        # Remove if off-screen
         if b['y'] > h + 40 or b['x'] < -40 or b['x'] > w + 40:
             birds.remove(b)
 
@@ -185,7 +193,6 @@ while cap.isOpened():
         end_pt = (int(bullet['x'] - bullet['vx'] * 0.7), int(bullet['y'] - bullet['vy'] * 0.7))
         cv2.line(frame, start_pt, end_pt, (0, 140, 255), 4)
 
-        # Check collision with each bird
         bullet_hit = False
         for bird in birds[:]:
             if dist_2d(bullet_pt, (bird['x'], bird['y'])) < bird['radius'] + 10:
@@ -206,13 +213,13 @@ while cap.isOpened():
         if exp['life'] <= 0:
             explosions.remove(exp)
 
-    # Render Muzzle Flash
-    if flash_counter > 0 and detection_result.hand_landmarks:
-        lm = detection_result.hand_landmarks[0]
-        fx, fy = int(lm[8].x * w), int(lm[8].y * h)
-        cv2.circle(frame, (fx, fy), 32, (0, 255, 255), -1)
-        cv2.circle(frame, (fx, fy), 16, (255, 255, 255), -1)
-        flash_counter -= 1
+    # Render Muzzle Flashes for both hands
+    for flash in muzzle_flashes[:]:
+        cv2.circle(frame, (flash['x'], flash['y']), 32, (0, 255, 255), -1)
+        cv2.circle(frame, (flash['x'], flash['y']), 16, (255, 255, 255), -1)
+        flash['life'] -= 1
+        if flash['life'] <= 0:
+            muzzle_flashes.remove(flash)
 
     # -------------------------------------------------------------
     # 5. OVERLAY HUD (STATUS & SCORE)
