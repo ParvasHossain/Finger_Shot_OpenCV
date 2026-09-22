@@ -21,7 +21,7 @@ CAMERA_URL = 0
 base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
 options = vision.HandLandmarkerOptions(
     base_options=base_options,
-    num_hands=2,  # <--- CHANGED: Support up to 2 hands simultaneously
+    num_hands=2,
     min_hand_detection_confidence=0.5,
     min_hand_presence_confidence=0.5,
     min_tracking_confidence=0.5
@@ -39,12 +39,19 @@ HAND_CONNECTIONS = [
 
 cap = cv2.VideoCapture(CAMERA_URL)
 
+# -------------------------------------------------------------
+# WINDOW CONFIGURATION (NORMAL WINDOW WITH TITLE BAR CONTROLS)
+# -------------------------------------------------------------
+window_name = "Finger Gun Detector"
+cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+cv2.resizeWindow(window_name, 1280, 720) # Default launch size
+
+is_fullscreen = False
 bullets = []
 birds = []
 explosions = []
-muzzle_flashes = []  # List to support simultaneous muzzle flashes for both hands
+muzzle_flashes = []
 
-# Track 'cocked' state separately for up to 2 hands
 was_cocked_state = {}
 score = 0
 bird_spawn_timer = 0
@@ -71,11 +78,9 @@ while cap.isOpened():
     status_text = "Searching Hands..."
     status_color = (150, 150, 150)
 
-    # -------------------------------------------------------------
     # 1. SPAWN BIRDS / TARGETS
-    # -------------------------------------------------------------
     bird_spawn_timer += 1
-    if bird_spawn_timer > 30:  # Faster spawns for dual-hand gameplay
+    if bird_spawn_timer > 30:
         bird_spawn_timer = 0
         birds.append({
             'x': float(random.randint(50, w - 50)),
@@ -86,14 +91,11 @@ while cap.isOpened():
             'color': (random.randint(50, 255), random.randint(50, 255), 255)
         })
 
-    # -------------------------------------------------------------
     # 2. HAND POSE & DUAL FINGER GUN DETECTION
-    # -------------------------------------------------------------
     if detection_result.hand_landmarks:
         for idx, hand_landmarks in enumerate(detection_result.hand_landmarks):
             lm = hand_landmarks
 
-            # Initialize cocked status for each detected hand index
             if idx not in was_cocked_state:
                 was_cocked_state[idx] = False
 
@@ -141,7 +143,6 @@ while cap.isOpened():
                     if gun_sound:
                         gun_sound.play()
 
-                    # Add flash for this specific hand tip
                     muzzle_flashes.append({'x': tip_px[0], 'y': tip_px[1], 'life': 5})
 
                     base_px = (int(lm[5].x * w), int(lm[5].y * h))
@@ -166,9 +167,7 @@ while cap.isOpened():
                     status_text = "HAND DETECTED"
                     status_color = (255, 255, 0)
 
-    # -------------------------------------------------------------
     # 3. UPDATE BIRDS
-    # -------------------------------------------------------------
     for b in birds[:]:
         b['x'] += b['vx']
         b['y'] += b['vy']
@@ -180,9 +179,7 @@ while cap.isOpened():
         if b['y'] > h + 40 or b['x'] < -40 or b['x'] > w + 40:
             birds.remove(b)
 
-    # -------------------------------------------------------------
     # 4. UPDATE BULLETS & HIT DETECTION
-    # -------------------------------------------------------------
     for bullet in bullets[:]:
         bullet['x'] += bullet['vx']
         bullet['y'] += bullet['vy']
@@ -213,7 +210,7 @@ while cap.isOpened():
         if exp['life'] <= 0:
             explosions.remove(exp)
 
-    # Render Muzzle Flashes for both hands
+    # Render Muzzle Flashes
     for flash in muzzle_flashes[:]:
         cv2.circle(frame, (flash['x'], flash['y']), 32, (0, 255, 255), -1)
         cv2.circle(frame, (flash['x'], flash['y']), 16, (255, 255, 255), -1)
@@ -221,18 +218,28 @@ while cap.isOpened():
         if flash['life'] <= 0:
             muzzle_flashes.remove(flash)
 
-    # -------------------------------------------------------------
     # 5. OVERLAY HUD (STATUS & SCORE)
-    # -------------------------------------------------------------
     cv2.putText(frame, f"STATUS: {status_text}", (20, 40), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, status_color, 2, cv2.LINE_AA)
     
     cv2.putText(frame, f"SCORE: {score}", (w - 220, 40), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
 
-    cv2.imshow("Finger Gun Detector", frame)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
+    # Check window close button (X button on window title bar)
+    if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
         break
+
+    cv2.imshow(window_name, frame)
+
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord('q'):
+        break
+    elif key == ord('f'):  # Press 'f' to toggle fullscreen on/off
+        is_fullscreen = not is_fullscreen
+        if is_fullscreen:
+            cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        else:
+            cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
 
 cap.release()
 cv2.destroyAllWindows()
